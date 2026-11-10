@@ -1,6 +1,8 @@
 package vt
 
 import (
+	"slices"
+
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/exp/ordered"
 )
@@ -331,9 +333,65 @@ func (s *Screen) InsertLine(n int) bool {
 		return false
 	}
 
+	if s.scroll.Min.X == 0 && s.scroll.Max.X == s.buf.Width() {
+		s.rotateLines(y, s.scroll.Max.Y, -n)
+		return true
+	}
+
 	s.buf.InsertLineArea(y, n, s.blankCell(), s.scroll)
 
 	return true
+}
+
+// rotateLines scrolls the full-width rows [top, bottom) by n rows: up when n
+// is positive, down when negative. Row headers move; no cell is copied. The
+// rows scrolled out are blanked in place and reused as the rows scrolled in,
+// so every row keeps backing storage of its own.
+func (s *Screen) rotateLines(top, bottom, n int) {
+	bottom = min(bottom, s.buf.Height())
+	top = max(top, 0)
+	h := bottom - top
+	if h <= 0 || n == 0 {
+		return
+	}
+	up := n > 0
+	if !up {
+		n = -n
+	}
+	n = min(n, h)
+	rows := s.buf.Lines[top:bottom]
+	var blank []uv.Line
+	if n < h {
+		if up {
+			rotateLeft(rows, n)
+			blank = rows[h-n:]
+		} else {
+			rotateLeft(rows, h-n)
+			blank = rows[:n]
+		}
+	} else {
+		blank = rows
+	}
+	fill := uv.EmptyCell
+	if c := s.blankCell(); c != nil {
+		fill = *c
+	}
+	for _, l := range blank {
+		for i := range l {
+			l[i] = fill
+		}
+	}
+	w := s.buf.Width()
+	for y := top; y < bottom; y++ {
+		s.buf.TouchLine(0, y, w)
+	}
+}
+
+// rotateLeft rotates rows left by k, 0 < k < len(rows), by three reversals.
+func rotateLeft(rows []uv.Line, k int) {
+	slices.Reverse(rows[:k])
+	slices.Reverse(rows[k:])
+	slices.Reverse(rows)
 }
 
 // DeleteLine deletes n lines at the cursor position Y coordinate.
@@ -364,6 +422,11 @@ func (s *Screen) DeleteLine(n int) bool {
 		// Save lines that will be deleted
 		linesToSave := min(n, scroll.Max.Y-y)
 		s.scrollback.PushN(s.buf, y, linesToSave)
+	}
+
+	if scroll.Min.X == 0 && scroll.Max.X == s.buf.Width() {
+		s.rotateLines(y, scroll.Max.Y, n)
+		return true
 	}
 
 	s.buf.DeleteLineArea(y, n, s.blankCell(), scroll)

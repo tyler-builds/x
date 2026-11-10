@@ -37,8 +37,7 @@ func (s *Scrollback) Push(line uv.Line) {
 	// This helps with wrapping and window resizing.
 	lastNonEmpty := -1
 	for i := len(line) - 1; i >= 0; i-- {
-		c := &line[i]
-		if !c.IsZero() && !c.Equal(&uv.EmptyCell) {
+		if !isBlank(&line[i]) {
 			lastNonEmpty = i
 			break
 		}
@@ -49,7 +48,10 @@ func (s *Scrollback) Push(line uv.Line) {
 
 	if len(s.lines) >= s.maxLines {
 		// Remove oldest line and append new one
-		s.lines = slices.Delete(s.lines, 0, 1)
+		// Drop the head by reslicing: append reallocates and copies only the
+		// live window once the capacity runs out, so eviction is amortized O(1).
+		s.lines[0] = nil
+		s.lines = s.lines[1:]
 	}
 	s.lines = append(s.lines, cloned)
 }
@@ -133,4 +135,20 @@ func (s *Scrollback) CellAt(x, y int) *uv.Cell {
 		return nil
 	}
 	return &line[x]
+}
+
+// isBlank reports whether c is a zero cell or an unstyled space, the cells
+// that Push trims from the end of a line.
+func isBlank(c *uv.Cell) bool {
+	if c.Content != "" && c.Content != " " {
+		return false
+	}
+	if c.Style.Fg != nil || c.Style.Bg != nil || c.Style.UnderlineColor != nil ||
+		c.Style.Underline != 0 || c.Style.Attrs != 0 || c.Link.URL != "" || c.Link.Params != "" {
+		return false
+	}
+	if c.Content == "" {
+		return c.Width == 0
+	}
+	return c.Width == 1
 }
